@@ -3,8 +3,11 @@ from langchain.agents import create_agent
 from langchain.tools import tool
 from langchain_core.messages import HumanMessage
 from langchain_openai import ChatOpenAI
+from tavily import TavilyClient
 
 load_dotenv()
+
+tavily = TavilyClient()
 
 
 @tool
@@ -17,7 +20,7 @@ def search(query: str) -> str:
         The search results
     """
     print(f"Searching for {query}")
-    return "Tokyo weather is sunny"
+    return tavily.search(query)
 
 
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
