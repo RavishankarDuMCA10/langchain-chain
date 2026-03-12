@@ -1,10 +1,5 @@
-from dotenv import load_dotenv
-from langchain.chat_models import init_chat_model
-from langchain.tools import tool
-from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
+import ollama
 from langsmith import traceable
-
-load_dotenv()
 
 MAX_ITERATIONS = 10
 MODEL = "qwen3:1.7b"
@@ -12,7 +7,7 @@ MODEL = "qwen3:1.7b"
 # -------- Tools (LangChain @tool decorator) --------
 
 
-@tool
+@traceable(run_type="tool")
 def get_product_price(product: str) -> float:
     """Look up the price of a product in the catalog."""
     print(f"   >> Executing get_product_price(product={product})")
@@ -20,7 +15,7 @@ def get_product_price(product: str) -> float:
     return prices.get(product.lower(), 0.0)
 
 
-@tool
+@traceable(run_type="tool")
 def apply_discount(price: float, discount_tier: str) -> float:
     """Apply a discount to a price and return the discounted price.
     Available discount tiers: "bronze", "silver", "gold"."""
@@ -31,6 +26,62 @@ def apply_discount(price: float, discount_tier: str) -> float:
     discount = discount_percentages.get(discount_tier.lower(), 0)
     return round(price * (1 - discount / 100), 2)
 
+
+# Difference 2: Without @tool, we must MANUALLY define the JSON schema for each function.
+# This is exactly what LangChain's @tool decorator generates automatically
+# from the function's type hints and docstring.
+tools_for_llm = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_product_price",
+            "description": "Look up the price of a product in the catalog.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "product": {
+                        "type": "string",
+                        "description": "The product name, e.g. 'laptop', 'headphones', 'keyboard'",
+                    },
+                    "required": ["product"],
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "apply_discount",
+            "description": "Apply a discount tier to a price and return the final price. Available tiers: bronze, silver, gold.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "price": {"type": "number", "description": "The original price"},
+                    "discount_tier": {
+                        "type": "string",
+                        "description": "The discount tier: 'bronze', 'silver', or 'gold'",
+                    },
+                },
+                "required": ["price", "discount_tier"],
+            },
+        },
+    },
+]
+
+# NOTE: Ollama can also auto-generate these schemsa if you pass the functions
+# directly as tools (similar to LangChain's @tool decorator):
+#   tools_for_llm = [get_product_price, apply_discount]
+# However, this requires your docstrings to follow the Google docstring format
+# so Ollama can parse parameter descriptions from the Args section. For example:
+#   def get_product_price(product: str) -> float:
+#       """Look up the price of a product in the catalog
+#
+#       Args:
+#           product: The product name e.g. 'laptop', 'headphones', 'keyboard'.
+#
+#       Returns:
+#           The price of the product, or 0 if not found.
+#       """
 
 # -------- Agent Loop --------
 
