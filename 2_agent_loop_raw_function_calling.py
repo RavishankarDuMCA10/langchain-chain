@@ -1,5 +1,9 @@
+from dotenv import load_dotenv
 import ollama
 from langsmith import traceable
+
+load_dotenv()
+
 
 MAX_ITERATIONS = 10
 MODEL = "qwen3:1.7b"
@@ -43,8 +47,8 @@ tools_for_llm = [
                         "type": "string",
                         "description": "The product name, e.g. 'laptop', 'headphones', 'keyboard'",
                     },
-                    "required": ["product"],
                 },
+                "required": ["product"],
             },
         },
     },
@@ -83,23 +87,32 @@ tools_for_llm = [
 #           The price of the product, or 0 if not found.
 #       """
 
+# --------- Helper: gtraced Ollama call -----------------
+# Difference 3: Without LangChain, we must manually trace LLM calls for LangSmith
+
+
+@traceable(name="Ollama Chat", run_type="llm")
+def ollama_chat_traced(messages):
+    return ollama.chat(model=MODEL, tools=tools_for_llm, messages=messages)
+
+
 # -------- Agent Loop --------
 
 
-@traceable(name="Langchain Agent Loop")
+@traceable(name="Ollama Agent Loop")
 def run_agent(question: str):
-    tools = [get_product_price, apply_discount]
-    tools_dict = {t.name: t for t in tools}
-
-    llm = init_chat_model(f"ollama:{MODEL}", temperature=0)
-    llm_with_tools = llm.bind_tools(tools)
+    tools_dict = {
+        "get_product_price": get_product_price,
+        "apply_discount": apply_discount,
+    }
 
     print(f"Question: {question}")
     print("=" * 60)
 
     messages = [
-        SystemMessage(
-            content=(
+        {
+            "role": "system",
+            "content": (
                 "You are a helpful shopping assistent."
                 "You have access to a product catalog tool "
                 "and a discount tool.\n\n"
@@ -112,16 +125,17 @@ def run_agent(question: str):
                 "Always use the apply_dicount tool.\n"
                 "4. If the user does not specify a discount tier, "
                 "ask them which tier to use - do NOT assume one."
-            )
-        ),
-        HumanMessage(content=question),
+            ),
+        },
+        {"role": "user", "content": question},
     ]
 
     for iteration in range(1, MAX_ITERATIONS + 1):
         print(f"\n--- Iteration {iteration} ---")
 
-        ai_message = llm_with_tools.invoke(messages)
-        messages.append(ai_message)
+        # Difference 5: ollama.chat() directly instead of llm_with_tools.invoke()
+        response = ollama_chat_traced(messages=messages)
+        ai_message = response.message
 
         tool_calls = ai_message.tool_calls
 
@@ -132,9 +146,9 @@ def run_agent(question: str):
 
         # Process anly the FIRST tool call - force one tool per iteration
         tool_call = tool_calls[0]
-        tool_name = tool_call.get("name")
-        tool_args = tool_call.get("args", {})
-        tool_call_id = tool_call.get("id")
+        # Difference 6: Attribute access (.function.name) instead of dict access (.get("name"))
+        tool_name = tool_call.function.name
+        tool_args = tool_call.function.arguments
 
         print(f" [Tool Selected] {tool_name} with args: {tool_args}")
 
@@ -142,12 +156,17 @@ def run_agent(question: str):
         if tool_to_use is None:
             raise ValueError(f"Tool '{tool_name}' not found")
 
-        observation = tool_to_use.invoke(tool_args)
+        # Difference 7: Direct function call instead of tool.invoke()
+        observation = tool_to_use(**tool_args)
 
         print(f" [Tool Result] {observation}")
 
+        messages.append(ai_message)
         messages.append(
-            ToolMessage(content=str(observation), tool_call_id=tool_call_id)
+            {
+                "role": "tool",
+                "content": str(observation),
+            }
         )
 
     print("ERROR: Max iterations reached without a final answer")
